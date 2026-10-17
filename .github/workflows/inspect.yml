@@ -1,0 +1,48 @@
+name: Inspect Minecraft 26.3
+on: workflow_dispatch
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: unzip -q hyperion-shader-iris-fork.zip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - name: Download Minecraft via Gradle
+        shell: bash
+        working-directory: iris
+        run: |
+          chmod +x gradlew
+          ./gradlew :fabric:validateAccessWidener --no-daemon || true
+      - name: Dump class info
+        shell: bash
+        run: |
+          mkdir -p dump
+          find ~/.gradle ~/.cache -name '*.jar' -size +5M 2>/dev/null | grep -i -E 'minecraft|mojang' > dump/jars.txt || true
+          cat dump/jars.txt
+          i=0
+          while read j; do
+            i=$((i+1))
+            unzip -Z1 "$j" '*.class' > dump/classes_$i.txt 2>/dev/null || true
+            echo "$j" > dump/jar_$i.path
+          done < dump/jars.txt
+          best=$(for f in dump/classes_*.txt; do echo "$(grep -c '^com/mojang/blaze3d' $f) $f"; done | sort -rn | head -1 | cut -d' ' -f2)
+          n=${best#dump/classes_}; n=${n%.txt}
+          J=$(cat dump/jar_$n.path); echo "USING $J" | tee dump/using.txt
+          grep -E '^(com/mojang/blaze3d|net/minecraft/client/renderer)' $best | grep -v '\$[0-9]' > dump/render_classes.txt
+          wc -l dump/render_classes.txt
+          sed 's/\.class$//' dump/render_classes.txt | sed 's#/#.#g' > dump/names.txt
+          xargs -a dump/names.txt -n 80 javap -p -cp "$J" > dump/members.txt 2>/dev/null || true
+          wc -l dump/members.txt
+          gzip -9 dump/members.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mc-inspect
+          path: |
+            dump/jars.txt
+            dump/using.txt
+            dump/render_classes.txt
+            dump/members.txt.gz
